@@ -34,6 +34,13 @@ for row in albumDataParsed.find('tbody').find_all('tr'):
 	time.sleep(2)
 fo.close()
 
-# naver
+# # naver
 # for row in albumDataParsed.find('ol',class_='song_info_ol').find_all('li'):
-# 	row.find('span',class_='info').find('em',string='작사').nextSibling.nextSibling.text
+# 	for col in row.find_all('span',class_='info'):
+# 		tagcol.find('em').text
+# 		col.find('a').text
+# 	print('\n')
+
+# 	lyricist=row.find('span',class_='info').find('em',string='작사').nextSibling.nextSibling.text
+
+# albumDataParsed.find('ol',class_='song_info_ol').find('li').find_all('span',class_='info').find('em',string='작곡')
