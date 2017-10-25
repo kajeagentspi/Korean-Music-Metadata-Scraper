@@ -1,0 +1,360 @@
+#!/usr/bin/python3
+from bs4 import BeautifulSoup
+from datetime import datetime
+from mutagen.flac import Picture, FLAC
+from mutagen import File
+import requests
+import urllib
+import urllib.parse
+import time
+import os
+import re
+import collections
+import json
+
+def dataGrab(url):
+	r = requests.get(url)
+	data = r.text
+	return BeautifulSoup(data, "html.parser")
+
+def melonSearch(date,albumName):
+	headers = {
+		'Host': 'm.app.melon.com',
+		'Accept': '*/*',
+		'User-Agent': 'Mozilla/5.0 (Linux; Android 8.0.0; Build/OPR6.170623.013) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/61.0.3163.98 Mobile Safari/537.36',
+		'Accept-Language': 'en-US,en;q=0.8',
+	}
+	params = (
+		('cpId', 'AS20'),
+		('cpKey', ''),
+		('memberKey', '0'),
+		('keyword', albumName),
+		('orderBy', 'hit'),
+		('dpCd', 'false'),
+	)
+	melonSearchData=requests.get('http://m.app.melon.com/search/mobile4web/searchalbum_list.htm', headers=headers, params=params)
+	melonSearchData=melonSearchData.text
+	melonSearchData=BeautifulSoup(melonSearchData, "html.parser")
+
+	for search in melonSearchData.find('ul',class_='service_list list_album').find_all('li',class_='list_item'):
+		if (search.find('span',class_='date').text==date):
+			melonAlbumID=search.find('input', {'name': 'albumId'}).get('value')
+			break
+	return str(melonAlbumID)
+
+def naverSearch(date,albumName):
+	albumName=urllib.parse.quote(albumName)
+	sortOrder=['POPULAR', 'RELEVANCE', 'RELEASE', 'TITLE']
+	headers = {
+		'Host': 'm.music.naver.com',
+		'Cache-Control': 'max-age=0',
+		'Origin': 'http://m.music.naver.com',
+		'X-Requested-With': 'XMLHttpRequest',
+		'If-Modified-Since': 'Thu, 1 Jan 1970 00:00:00 GMT',
+		'Save-Data': 'on',
+		'User-Agent': 'Mozilla/5.0 (Linux; Android 8.0.0; Build/OPR6.170623.013) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/61.0.3163.98 Mobile Safari/537.36',
+		'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+		'Accept': '*/*',
+		'Referer': 'http://m.music.naver.com/search/search.nhn?target=album&query=Love+generation&sort=RELEVANCE',
+		'Accept-Language': 'en-US,en;q=0.8',
+	}
+	for sort in sortOrder:
+		data = "target=album&now=0&more=10000&tot=5200&query="+albumName+"&sort="+sort+"&queryForce=false"
+		naverSearchData=requests.post('http://m.music.naver.com/search/searchJsonAPI.nhn', headers=headers, data=data)
+		naverSearchData=eval(naverSearchData.text[:-10][16:])['result']
+		for search in naverSearchData:
+			if (search['releaseDate']==date):
+				naverAlbumID=search['albumId']
+				break
+		else:
+			continue
+	return str(naverAlbumID)
+
+def genieSearch(date,albumName):
+	headers = {
+		'Host': 'app.genie.co.kr',
+	}
+	data = [
+		('query', albumName),
+		('pagesize', '1000'),
+	]
+
+	genieSearchData=requests.post('https://app.genie.co.kr/Iv3/Search/f_Search_Album.asp', headers=headers, data=data)
+	genieSearchData=genieSearchData.text
+	genieSearchData=eval(genieSearchData.replace('null','None').replace('true','True').replace('false','False'))
+	for search in genieSearchData['items']['album']['items']:
+		searchDate=datetime.strptime(search['ALBUM_RELEASE_DT'], '%Y%m%d').strftime('%Y.%m.%d')
+		if(searchDate==date):
+			genieAlbumID=search['ALBUM_ID']	
+			break
+	return genieAlbumID
+
+def itunesSearch(date,albumName):
+	albumName=urllib.parse.quote(albumName)
+	data=requests.get('https://itunes.apple.com/search?term='+albumName+'&entity=album&limit=1000')
+	data=json.loads(data.text)
+	for result in data['results']:
+		if result['releaseDate'][:10].replace('-','.')==date:
+			return result['artworkUrl60'].replace("60x60bb","100000x100000-999")
+
+def getAlbumData(date,albumName,override):
+	print(albumName)
+	if (override==1):
+		albumName=input("Melon: ")
+	melonAlbumID=melonSearch(date,albumName)
+	if (override==1):
+		albumName=input("Naver: ")
+	naverAlbumID=naverSearch(date,albumName)
+	if (override==1):
+		albumName=input("Genie: ")
+	genieAlbumID=genieSearch(date,albumName)
+	print("melonAlbumID: "+melonAlbumID)
+	print("naverAlbumID: "+naverAlbumID)
+	print("genieAlbumID: "+genieAlbumID)
+	return getAlbumArt(naverAlbumID,date,albumName), IDcheck(melonAlbumID,naverAlbumID,genieAlbumID)
+
+
+def naverGetAlbumArt(naverAlbumID):
+	coverlocation=naverAlbumID.zfill(9).strip()
+	link='http://musicmeta.phinf.naver.net/album/'.strip()
+	link+=coverlocation[0:3].strip()
+	link+='/'.strip()
+	link+=coverlocation[3:6].strip()
+	link+='/'.strip()
+	link+=naverAlbumID.strip()
+	link+='.jpg'.strip()
+	return link
+
+def getAlbumArt(naverAlbumID,date,albumName):
+	albumArt=requests.get(itunesSearch(date,albumName)).content
+
+	# albumArt=requests.get(naverGetAlbumArt(naverAlbumID)).content
+	print('Grabbed Album Art')
+
+	return albumArt
+
+def getMelonAlbumData(melonAlbumID):
+	melonAlbumURL="http://www.melon.com/album/detail.htm?albumId="
+	melonAlbumData=dataGrab(melonAlbumURL+melonAlbumID)
+	return melonAlbumData
+
+def getNaverAlbumData(naverAlbumID):
+	naverAlbumURL="http://music.naver.com/album/index.nhn?albumId="
+	naverAlbumData=dataGrab(naverAlbumURL+naverAlbumID)
+	return naverAlbumData
+
+def getGenieAlbumData(genieAlbumID):
+	genieAlbumURL="http://www.genie.co.kr/detail/albumInfo?axnm="
+	genieAlbumData=dataGrab(genieAlbumURL+genieAlbumID)
+	return genieAlbumData
+
+def IDcheck(melonAlbumID,naverAlbumID,genieAlbumID):
+	melonAlbumData=getMelonAlbumData(melonAlbumID)
+	naverAlbumData=getNaverAlbumData(naverAlbumID)
+	genieAlbumData=getGenieAlbumData(genieAlbumID)
+	melonSongCount=len(melonAlbumData.find('tbody').find_all('tr'))
+	naverSongCount=len(naverAlbumData.find('tbody').find_all('tr'))-1
+	genieSongCount=len(genieAlbumData.find('tbody').find_all('tr'))
+	if (melonSongCount==naverSongCount==genieSongCount):
+		songCount=melonSongCount
+		return grabStart(melonAlbumID,genieAlbumData)
+	else:
+		print("Album Size Mismatch")
+
+
+def getMelonSongData(melonSongID):
+	melonSongURL="http://m.app.melon.com/album/informBasic.json?albumId="
+	data=req
+	return getMelonSong(melonSongData)
+
+def getGenieSongData(genieSongID):
+	genieSongURL="http://www.genie.co.kr/detail/songInfo?xgnm="
+	genieSongData=dataGrab(genieSongURL+genieSongID)
+	return genieSongData
+
+def getMelonSong(melonSongData):
+	lyricist=[]
+	composer=[]
+	arranger=[]
+	genre=melonSongData.find('dt', string='장르').nextSibling.nextSibling.text.split(" / ")
+	for row in melonSongData.find_all('div',class_='box_lyric'):	
+		if row.find('dt',string='작사') is not None:
+			lyricist+=[row.find('dd',class_='atist').text.replace("`","\'")]
+			continue
+		elif row.find('dt',string='작곡') is not None:
+			composer+=[row.find('dd',class_='atist').text.replace("`","\'")]
+			continue
+		elif row.find('dt',string='편곡 ') is not None:
+			arranger+=[row.find('dd',class_='atist').text.replace("`","\'")]
+	return {"lyricist":lyricist, "composer":composer, "arranger":arranger, "genre":genre}
+
+def getGenieUnsyncedLyrics(genieSongID):
+	genieSongData=getGenieSongData(genieSongID)
+	lyrics=genieSongData.find('p',id='pLyrics').text.replace('\r\n','\n')
+	lyrics=re.sub(r"\n[0-9]\.\n","\n",lyrics)
+	return lyrics
+
+def getGenieSyncedLyrics(genieSongID):
+	headers = {'Host': 'dn.genie.co.kr'}
+	params = (('songid', genieSongID), ('callback', 'GenieCallBack'))
+	lyrics=""
+	lyricsArray=requests.get('http://dn.genie.co.kr/app/purchase/get_msl.asp', headers=headers, params=params)
+	lyricsArray.encoding='utf-8'
+	lyricsArray=lyricsArray.text[14:][:-2]
+	lyricsArray=eval(lyricsArray)
+	lyricsArray={int(key):lyricsArray[key] for key in lyricsArray}
+	lyricsArray=collections.OrderedDict(sorted(lyricsArray.items()))
+	time=list(lyricsArray.keys())
+	line=list(lyricsArray.values())
+	
+	for i in range (0,len(time)):
+		seconds, milliseconds = divmod(time[i], 1000)
+		minute, seconds = divmod(seconds, 60)
+		lrcline="["+str(minute).zfill(2)+":"+str(seconds).zfill(2)+"."+str(milliseconds)[:2].zfill(2)+"]"+line[i]+"\n"
+		lyrics+=lrcline
+	if (lyrics==""):
+		print("Grabbed Unynced Lyrics of "+genieSongID)
+		return getGenieUnsyncedLyrics(genieSongID)
+	else:
+		print("Grabbed Synced Lyrics of "+genieSongID)
+		return lyrics
+
+# Dependencies start
+
+def getBasicAlbumInfo(melonAlbumID):
+	data=requests.get("http://m.app.melon.com/album/informBasic.json?albumId="+melonAlbumID)
+	data=json.loads(data.text)['response']
+	ALBUM=data['ALBUMNAME'].replace("`","\'")
+	ALBUMARTIST=[]
+	for entry in data['ARTISTLIST']:
+		ALBUMARTIST+=[entry['ARTISTNAME'].replace("`","\'")]
+	DATE=data['ISSUEDATE']
+	YEAR=DATE.split('.')[0]
+	return {'ALBUM':ALBUM,'ALBUMARTIST':ALBUMARTIST,'DATE':DATE}
+
+def getSongList(melonAlbumID):
+	data=requests.get("http://m.app.melon.com/album/song/listSongAlbum.json?albumId="+melonAlbumID)
+	data=json.loads(data.text)['response']
+	DISCDATA=[]
+	for entry in data['CDLIST']:
+		cd=[]
+		for track in entry['SONGLIST']:
+			cd+=[[track['TRACKNO'],track['SONGID']]]
+		DISCDATA+=[cd]
+	return DISCDATA
+
+def getSongData(melonSongID):
+	data=requests.get("http://m.app.melon.com/song/info.json?songId="+melonSongID)
+	data=json.loads(data.text)['response']
+	TITLE=data['SONGINFO']['SONGNAME'].replace('`','\'')
+	SOURCE="WEB"
+	if " (CD Only)" in TITLE:
+		TITLE=TITLE.replace(" (CD Only)","")
+		SOUCE="CD"
+	ARTIST=[]
+	for entry in data['ARTISTLIST']:
+		ARTIST+=[entry['ARTISTNAME']]
+	GENRE=[]
+	for entry in data['SONGINFO']['GENRELIST']:
+		GENRE+=[entry['GENRENAME']]
+	print(ARTIST)
+
+	LYRICIST=[]
+	try:
+		for entry in data['LYRICISTLIST']:
+			LYRICIST+=[entry['ARTISTNAME'].replace("`","\'")]
+	except:
+		print("No Lyricist")
+	COMPOSER=[]
+	for entry in data['COMPOSERLIST']:
+		COMPOSER+=[entry['ARTISTNAME'].replace("`","\'")]
+	ARRANGER=[]
+	for entry in data['ARRANGERLIST']:
+		ARRANGER+=[entry['ARTISTNAME'].replace("`","\'")]
+	return {'TITLE':TITLE,'ARTIST':ARTIST,'GENRE':GENRE,'LYRICIST':LYRICIST,'COMPOSER':COMPOSER,'ARRANGER':ARRANGER,'SOURCE':SOURCE}
+
+
+def grabStart(melonAlbumID,genieAlbumData):
+	albumTag=[]
+	albumInfo=getBasicAlbumInfo(melonAlbumID)
+	songList=getSongList(melonAlbumID)
+	DISCTOTAL=str(len(songList))
+	TRACKTOTAL=0
+	for disc in songList:
+		TRACKTOTAL+=len(disc)
+	TRACKTOTAL=str(TRACKTOTAL)
+	for DISCNUMBER in range (0,len(songList)):
+		for track in songList[DISCNUMBER]:
+			trackinfo={'TRACKNUMBER':track[0].zfill(2),'DISCTOTAL':DISCTOTAL.zfill(2),'TRACKTOTAL':TRACKTOTAL.zfill(2),'DISCNUMBER':str(DISCNUMBER+1).zfill(2)}
+			trackinfo.update(albumInfo)
+			trackinfo.update(getSongData(track[1]))
+			albumTag+=[trackinfo]
+	for row in genieAlbumData.find('tbody').find_all('tr'):
+		genieSongID=row['songid']
+		track=row.find('td',class_='number').text.split('\r\n')[0]
+		albumTag[int(track)-1].update({"LYRICS":getGenieSyncedLyrics(genieSongID)})
+	print("Grabbed Metadata")
+	return albumTag
+
+
+def tagToFile(albumTag,albumArt,folderName,source):
+	albumartist=""
+	for i in range (0,len(albumTag)):
+		for item in os.listdir(folderName):
+			if re.search(albumTag[i]['TRACKNUMBER'],item):
+				audio = File(folderName+'/'+item)
+				audio.delete()
+				audio.clear_pictures()
+				audio['soundquality']=str(audio.info.bits_per_sample)+'/'+str(audio.info.sample_rate)[:2]
+				for tag,value in albumTag[i].items():
+					audio[tag]=value
+				if (source=="CD"):
+					audio['source']="CD"
+				audio.save()
+
+				file=os.rename(folderName+'/'+item,folderName+'/'+albumTag[i]['TRACKNUMBER']+' '+albumTag[i]['TITLE'].replace("/","∕").replace("?","？").replace(":","：")+'.'+item.split(".")[-1])
+			continue
+	destination='../'+', '.join(albumTag[0]['ALBUMARTIST']).replace("/","∕").replace("?","？").replace(":","：")+'/['+albumTag[0]['DATE']+'] '+albumTag[0]['ALBUM'].replace("/","∕").replace("?","？").replace(":","：")
+	if not os.path.exists(destination):
+		os.makedirs(destination)
+	os.rename(folderName,destination)
+	f=open(destination+"/cover.jpg",'wb')
+	f.write(albumArt)
+	f.close()
+
+def main(date,albumName,folderName,override,source):
+	try:
+		albumArt, albumTag=getAlbumData(date,albumName,override)
+		tagToFile(albumTag,albumArt,folderName,source)
+	except:
+		print("Error moving to error folder")
+		if not os.path.exists("../error"+folderName):
+			os.makedirs("../error"+folderName)
+		os.rename(folderName,"../error"+folderName)
+
+
+filearray=os.listdir()
+for fold in filearray:
+	folder=fold
+	fold=fold.replace("∕","/").replace("？","?").replace("：",":")
+	
+	print(folder)
+	date=fold.split('[')[1].split(']')[0]
+	print(date)
+	albumName=fold.split('] ')[1]
+	if '`' in albumName:
+		albumName=albumName.replace('`','\'')
+	if '\'' in albumName:
+		albumName=albumName.split('\'')[1]
+	if ' OST' in albumName:
+		albumName=albumName.split(' OST')[0]
+	print(albumName)
+	
+	override=0
+	source="WEB"
+	
+	# try:
+	main(date,albumName,folder,override,source)
+	# except:
+		# continue
+# "[2017.04.27] Love & Evil","[2017.03.13] Love & Live"
